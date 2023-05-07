@@ -1,17 +1,19 @@
 initialize <- function() {
-  libraries <- c("boot","glmnet","gridExtra","scales","progress","zoo","memoise","doParallel","foreach","ggplot2","dplyr", "changepoint", "tidyr", "MASS", "olsrr", "car",'gvlma','sjPlot','car','generalhoslem',"corrplot")
+  libraries <- c("MASS","reshape2","boot","glmnet","gridExtra","scales","progress","zoo","memoise","doParallel","foreach","ggplot2","dplyr", "changepoint", "tidyr", "MASS", "olsrr", "car",'gvlma','sjPlot','car','generalhoslem',"corrplot")
   for(lib in libraries)
   {
-    if (!require(lib, character.only = TRUE)) {
-      print(paste(lib, "is not installed, attempting to install now..."))
-      install.packages(lib)
+    suppressPackageStartupMessages(
       if (!require(lib, character.only = TRUE)) {
-        stop(paste("Failed to install", lib))
+        print(paste(lib, "is not installed, attempting to install now..."))
+        install.packages(lib)
+        if (!require(lib, character.only = TRUE)) {
+          stop(paste("Failed to install", lib))
+        }
+        print(paste(lib, "has been installed!"))
+      } else {
+        print(paste(lib, "is already installed"))
       }
-      print(paste(lib, "has been installed!"))
-    } else {
-      print(paste(lib, "is already installed"))
-    }
+    )
   }
   set.seed(123)
 }
@@ -163,12 +165,6 @@ is_increase_above_sd_threshod = function (data, threshold,threshold_days,partial
 }
 
 # This function outputs the a copy of the data provided, but alters all columns not included in the "columns_to_exclude" argument.
-# The columns to exclude are just not altered. They are still returned in an unaltered state with the rest of the columns.
-# The columns will be altered to have a value be TRUE if for the last 7 days, based on a threshold for a specified number of days and standard deviation
-# I want to play with moving_average_days here, but 30 might be necessary for reasonable std estimation and to prevent any spike having too large an effect and perhaps going undetected. 
-# I want to keep it a bit smaller, so that the time period being focused on is not too large. 
-# The war has changed over time, so deviations are bound to change. 
-# Thus identifying spikes has to be treated differently over time too.
 createBoolDataOnThreshold = function(data,moving_average_days,threshold_sd,columns_to_exclude=NULL,partial=TRUE)
 {
   result = data # initialize result with the input data
@@ -230,50 +226,178 @@ addMajorDateLines = function()
   abline(v=262,col="red") #	2022-11-12 end of counteroffensive day 262
 }
 
-makeMajorLoss = function(num_threshold,data){
-  row_sums <- rowSums(data == TRUE)
-  return (row_sums>num_threshold)
-}
-
-
-# Define a function that returns the AIC value of the glm model with given parameters
-get_aic <- function(threshold_sd, threshold_days, moving_average_days,data) {
-  data_bool <- createBoolDataOnThreshold(data, moving_average_days = moving_average_days,
-                                         threshold_sd = threshold_sd, columns_to_exclude = c("date","day","isOffensive","majorEvent"))
-  didBigSpikeOccurOverLastWeek <- checkIfAtLeastOneTrue(data_bool, threshold_days, c("date","day","isOffensive","CivAttackFreq"))
-  didBigSpikeOccurOverLastWeek$MajorLossCount = countMajorLosses(didBigSpikeOccurOverLastWeek[setdiff(names(data_bool),  c("date", "day", "CivAttackFreq", "isOffensive"))])
-  
-  
-  didBigSpikeOccurOverLastWeek <- didBigSpikeOccurOverLastWeek[,-1:-2] # remove date and day
-  tryCatch({
-    null = capture.output(glm_model <- step(glm(CivAttackFreq ~ ., data = didBigSpikeOccurOverLastWeek), trace = 0,silent=TRUE))
-    AIC(glm_model)
-  }, error = function(e) {
-    message(paste0("Error in step(glm(CivAttackFreq ~ ., data = didBigSpikeOccurOverLastWeek)): ", e$message))
-    Inf
-  })
-}
-
-# Define a function that returns the BIC value of the glm model with given parameters
-get_bic <- function(threshold_sd, threshold_days, moving_average_days,data) {
-  data_bool <- createBoolDataOnThreshold(data, moving_average_days = moving_average_days,
-                                         threshold_sd = threshold_sd, columns_to_exclude = c("date","day","isOffensive","majorEvent"))
-  didBigSpikeOccurOverLastWeek <- checkIfAtLeastOneTrue(data_bool, threshold_days, c("date","day","isOffensive","CivAttackFreq"))
-  didBigSpikeOccurOverLastWeek$MajorLossCount = countMajorLosses(didBigSpikeOccurOverLastWeek[setdiff(names(data_bool),  c("date", "day", "CivAttackFreq", "isOffensive"))])
-  
-  
-  didBigSpikeOccurOverLastWeek <- didBigSpikeOccurOverLastWeek[,-1:-2] # remove date and day
-  tryCatch({
-    null = capture.output(glm_model <- step(glm(CivAttackFreq ~ ., data = didBigSpikeOccurOverLastWeek), trace = 0,silent=TRUE))
-    BIC(glm_model)
-  }, error = function(e) {
-    message(paste0("Error in step(glm(CivAttackFreq ~ ., data = didBigSpikeOccurOverLastWeek)): ", e$message))
-    Inf
-  })
-}
-
 countMajorLosses = function(data){
   row_sums <- rowSums(data == TRUE)
   return (row_sums)
 }
 
+makeMajorLoss = function(num_threshold,data){
+  row_sums <- rowSums(data == TRUE)
+  return (row_sums>num_threshold)
+}
+
+get_didBigSpikeOccurOverLastWeek = function(threshold_sd, threshold_days, moving_average_days,majorLossThreshold,data)
+{
+  data_bool <- createBoolDataOnThreshold(data, moving_average_days = moving_average_days,
+                                         threshold_sd = threshold_sd, columns_to_exclude = c("date","day","isOffensive","majorEvent"))
+  didBigSpikeOccurOverLastWeek <- checkIfAtLeastOneTrue(data_bool, threshold_days, c("date","day","isOffensive","CivAttackFreq"))
+  didBigSpikeOccurOverLastWeek$MajorLossCount = countMajorLosses(didBigSpikeOccurOverLastWeek[setdiff(names(data_bool),  c("date", "day", "CivAttackFreq", "isOffensive"))])
+  didBigSpikeOccurOverLastWeek$MajorLoss = didBigSpikeOccurOverLastWeek$MajorLossCount > majorLossThreshold
+  didBigSpikeOccurOverLastWeek <- didBigSpikeOccurOverLastWeek[,-1:-2] # remove date and day
+  return(didBigSpikeOccurOverLastWeek)
+}
+
+# Define a function that returns the AIC or BIC given arguments. Will return the model if no metric is specified
+get_model_or_metric <- function(type,threshold_sd, threshold_days, moving_average_days,majorLossThreshold,minNumberOfCivAttacks,data,metric="None") {
+ 
+  didBigSpikeOccurOverLastWeek = get_didBigSpikeOccurOverLastWeek(threshold_sd, threshold_days, moving_average_days,majorLossThreshold,data)
+  if(sum(didBigSpikeOccurOverLastWeek$CivAttackFreq) < minNumberOfCivAttacks)
+  {
+    #if there isn't enough TRUE values for civilian spikes, we aren't interested in that model
+    return(Inf)
+  }
+    if(type=="step")
+    {
+      tryCatch({
+        null = capture.output(glm_model <- step(glm(as.integer(CivAttackFreq) ~ ., data = didBigSpikeOccurOverLastWeek,family = "binomial"), direction = "both", trace = 0, silent=TRUE))
+      }, error = function(e) {
+        message(paste0("Error in step(glm(CivAttackFreq ~ ., data = didBigSpikeOccurOverLastWeek)): ", e$message))
+        return(Inf)})
+    } else if( type =="lasso")
+    {
+      tryCatch({
+        #check if big loss occurred over threshold of days
+        cv.fit <- cv.glmnet(as.matrix(didBigSpikeOccurOverLastWeek[, !names(didBigSpikeOccurOverLastWeek) %in% c("date", "day","CivAttackFreq")]),didBigSpikeOccurOverLastWeek[["CivAttackFreq"]], family="binomial",alpha = 1)
+        best.lambda <- cv.fit$lambda.min
+        
+        # Fit LASSO model with the best lambda value
+        lasso.fit <- glmnet(as.matrix(didBigSpikeOccurOverLastWeek[, !names(didBigSpikeOccurOverLastWeek) %in% c("date", "day","CivAttackFreq")]),didBigSpikeOccurOverLastWeek[["CivAttackFreq"]],family="binomial", alpha = 1, lambda = best.lambda)
+        selected = row.names(coef(lasso.fit,s=best.lambda))[which(coef(lasso.fit, s = best.lambda) != 0)]
+      }, error = function(e) {
+        message(paste0("Error in generating Lasso fit: ", e$message))
+        return(Inf)})
+      tryCatch({
+        # Fit the final model with the only the selected variables used in the LASSO regression
+        if(length(selected)!=1)
+        {
+          glm_model = glm(CivAttackFreq ~ ., data = didBigSpikeOccurOverLastWeek[, c("CivAttackFreq", selected[-1])],family="binomial")
+        } else {
+          glm_model = glm(CivAttackFreq ~ 1, data = didBigSpikeOccurOverLastWeek,family="binomial")
+        }
+      }, error = function(e) {
+        message(paste0("Error in generating binary logistic regression: ", e$message))
+        return(Inf)})
+    }
+    if (metric=="aic")
+    {
+      return(AIC(glm_model))
+    } else if(metric == "bic"){
+      return(BIC(glm_model))
+    }
+    return(glm_model)
+
+}
+
+
+checkAssumptions = function(model)
+{
+  #glm of bianary logistic, and polr is for ordinal binary logistic
+  #trafo didn't work very well for my purposes.
+  #major assumptions of binary logistic regression:
+  #1) the response variable is always TRUE or FALSE ---> this is true for my data
+  #2) There should exist no outliers in the data
+  #3) There should not be a high degree of multicollinearity amoung the different explantory variables, this can be determined with Jaccard coefficient.
+  
+  
+  #assess if there are outliers
+  try(predicted_labels <- predict(model))
+  
+  print(outlierTest(model))
+  cooks_d <- cooks.distance(model)
+  high_leverage = cooks_d > 4/nrow(predicted_labels)
+  if(length(high_leverage)==0)
+  {
+    cat("\nno outliers with high leverage found\n")
+  } else
+  {
+    cat("outliers with high leverage:\n")
+    print(model$model[which(high_leverage)])
+  }
+  
+  
+  #given the very low preportion of True to False, VIF does not have to be as high to indicate multi-collinearity as it normally would. However, these values are still low and indicate no multi-collinearity
+  tryCatch({
+    cat("VIF\n")
+    vif(model)
+  }, error = function(e) {
+    message("Error calculating VIF: the model contains fewer than 2 terms. There can't be multi-collinearity")
+  })
+}
+
+
+get_all_models = function(type,metric, total_step_calls, threshold_sd_range, threshold_days_range, moving_average_days_range, majorLossThreshold_range, minNumberOfCivAttacks, data) {
+  if( type == "lasso"||type=="step")
+  {
+    if (metric == "aic" || metric == "bic") {
+      start = Sys.time()
+      # Set up parallel backend and register it with foreach
+      #it wasn't worth the time trying to figure out how to get a progress % setup for a multithread, so i just output a very rough estimate of time      estimatedMinutes = floor(total_step_calls*0.08081424801 / 60)
+      estimatedSeconds = round((total_step_calls*0.08081424801) %% 60)
+      if(!(total_step_calls>1))
+      {
+        cat("Only 1 set of arguments passed for calculations. You need to have total_step_calls be at least 2.\n")
+      }
+      if(estimatedMinutes==0)
+      {
+        cat("rough Estimate on Time for Calculation: ",estimatedSeconds, "Seconds", " + 8 seconds for initializing\n")
+      } else {
+        cat("rough Estimate on Time for Calculation: ",estimatedMinutes, " minutes and ", estimatedSeconds+8, " seconds\n")
+      }
+      
+      cl <- makeCluster(detectCores())
+      registerDoParallel(cl)
+      
+      null = capture.output(clusterEvalQ(cl, {
+        library(memoise)
+        library(doParallel)
+        library(foreach)
+        library(ggplot2)
+        library(dplyr)
+        library(changepoint)
+        library(tidyr)
+        library(MASS)
+        library(olsrr)
+        library(car)
+        library(gvlma)
+        library(sjPlot)
+        library(generalhoslem)
+        library(glmnet)
+        library(corrplot)
+        source("practicalAssignmentCustomTools.R")
+      }))
+      
+      
+      # Loop through all combinations of parameter values and find the one with the lowest AIC/BIC value
+      #results should be combined from all the threads after it is finished and should have a list of the parameters and AIC/BIC for each iteration after the cluster is done
+      step_calls <- expand.grid(threshold_sd_range, threshold_days_range, moving_average_days_range,majorLossThreshold_range)
+      step_calls <- step_calls[step_calls[, 2] < step_calls[, 3], ] #not particularly necessary if you are setting the ranges correctly. This isn't computationally necessary, but this is a case that shouldn't happen. The threshold of days should be relatively low compared to the days used to calculate the moving average.
+      results <- foreach(i = 1:nrow(step_calls), .combine = rbind) %dopar% {
+        metric_value <- get_model_or_metric(type,step_calls[i, 1], step_calls[i, 2], step_calls[i, 3],step_calls[i, 4],minNumberOfCivAttacks, data,metric)
+        c(step_calls[i, ], metric_value) #this function will return INF if the model has less than a set number of TRUE values for civAttack
+      }
+      colnames(results) <- c("threshold_sd", "threshold_days", "moving_average_days","majorLossThreshold", metric)
+      write.csv(results, sprintf("results%s%s%s",type,toupper(metric),".csv"), row.names = FALSE)
+      stopCluster(cl)
+      end = Sys.time()
+      time_to_complete = as.numeric(end-start)
+      minutes = floor(time_to_complete / 60)
+      seconds = round(time_to_complete %% 60)
+      cat("Time Taken for Calculation: ", minutes, " minutes and ", seconds, " seconds\n")
+      return(results)
+    } else {
+    cat("Please specify whether to run BIC or AIC.\n")
+    }
+  }else {
+    cat("Please specify whether to run step or lasso.\n")
+  }
+}
